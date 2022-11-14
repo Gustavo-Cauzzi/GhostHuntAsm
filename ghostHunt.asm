@@ -31,8 +31,15 @@
                db ' x   xx   x '
     GHOST_MASK_WIDTH_LEN db 12
     GHOST_MASK_HEIGHT_LEN db 10    
+                                   
+    ; Gerais
+    VIDEO_BUFFER_SEGMENT dw 40960 ; A000H
+    PRETO    db 0
+    VERDE    db 0AH ;2
+    CIANO    db 0EH ;3
+    VERMELHO db 0CH ;4
+    MAGENTA  db 0DH ;5
     
-    VIDEO_BUFFER_SEGMENT dw 40960
                                                                  
     ; Tela inicial
     TITLE_SELECTED_BTN db 1 ; 1 ou 2     
@@ -222,14 +229,82 @@ proc TITLE_BTNS
     int 21H
                    
     ret
+endp      
+ 
+; Seta o DS para o buffer de vídeo        
+proc SET_DS_VIDEO_BUFFER 
+    PUSH AX         
+    MOV AX, VIDEO_BUFFER_SEGMENT ; Seta o segmento de buffer de vídeo (precisa do AX para essa atribuicao)
+    MOV DS, AX      
+    POP AX
+    ret
+endp     
+                   
+proc SET_DS_NORMAL_SEGMENT
+    PUSH AX    
+    mov AX, @DATA   
+    mov DS, AX      
+    POP AX
+    ret
 endp
-       
+         
+; DX = offset da mascara.
+; CL = Comprimento da mascara
+; CH = Altura da mascara
+; AL = Cor      
+; BX = Endereço inicial do segmento A000H
+proc DRAW_MASK
+    PUSH DS  
+    PUSH CX   
+    PUSH DX
+    PUSH AX
+             
+    call SET_DS_VIDEO_BUFFER
+                                        
+    MOV AH, CH ; Altura da mascara eh controlado abaixo por AH 
+    XOR CH, CH                          
+    MOV DI, CX ; Auxiliar do comprimento da linha
+ 
+    MASK_LINE_RENDER_LOOP:
+        MASK_RENDER_LOOP:
+            ; SERÁ QUE N TEM QUE VOLTAR O DS?
+            call SET_DS_NORMAL_SEGMENT  
+            PUSH BX 
+            MOV BX, DX
+            MOV BX, [BX]  ; DX nao acessa a memoria
+            CMP BL, ' '   ; compara o proximo char da mascara                   
+            POP BX
+            call SET_DS_VIDEO_BUFFER
+            JE NEXT_CHAR_MASK_RENDER ; Se for um espaco na mascara, pule pro proximo pixel
+            
+            MOV [BX], AL 
+            
+            NEXT_CHAR_MASK_RENDER:  
+            INC BX
+            INC DX
+            LOOP MASK_RENDER_LOOP     
+         DEC AH                                                                         
+         MOV CX, DI    ; Reinicia a contagem de comprimento da linha para o proximo loop
+         
+         ADD BX, 320 
+         SUB BX, CX
+         CMP AH, 0
+         JNE MASK_LINE_RENDER_LOOP
+ 
+    POP AX
+    POP DX
+    POP CX
+    POP DS
+    RET
+DRAW_MASK endp
+             
 ; DH = Y (linha). DL = X (coluna). CH = Cor
 proc DRAW_ONE_GHOST
     PUSH AX
     PUSH DS
     PUSH BX     
-    PUSH CX
+    PUSH CX 
+    PUSH DX
             
     MOV CL, DL  ; Salva o conteudo de DL em CL como um auxiliar pois a multiplicacao destroi o conteudo de DX
             
@@ -242,13 +317,16 @@ proc DRAW_ONE_GHOST
     MOV BL, CL  ; Move a linha para BL (com BX zerado) para poder somar registradores de 16 bits (soma equivalente)
     ADD AX, BX  ; Soma com a coluna para encontrar a posição correta   
     
-    MOV BX, AX  ; Salva a posicao exata do pixel em BX
-     
-    MOV AX, VIDEO_BUFFER_SEGMENT ; Seta o segmento de buffer de vídeo (precisa do AX para essa atribuicao)
-    MOV DS, AX                          
-                                                                                  
-    MOV [BX], CH ; Poe o pixel na posicao correta com a cor correspondente    
-          
+    MOV BX, AX  ; Salva a posicao exata do pixel em BX                        
+
+    MOV DX, offset GHOST_MASK         
+    MOV AL, CH                    ; Cor para bl
+    MOV CL, GHOST_MASK_WIDTH_LEN               
+    MOV CH, GHOST_MASK_HEIGHT_LEN
+ 
+    call DRAW_MASK 
+             
+    POP DX
     POP CX
     POP BX
     POP DS
@@ -258,11 +336,23 @@ DRAW_ONE_GHOST endp
         
 proc DRAW_INITIAL_SCREEN_GHOSTS   
     PUSH DX
-           
-    MOV CH, 0CH ; VERMELHO_CLARO
-    MOV DL, 10H
-    MOV DH, 10H
+               
+    MOV DH, 120 ; ALTURA DE TODOS
     
+    MOV CH, VERDE
+    MOV DL, 100
+    call DRAW_ONE_GHOST
+                       
+    MOV CH, CIANO
+    MOV DL, 138 ; X + 38
+    call DRAW_ONE_GHOST
+    
+    MOV CH, VERMELHO
+    MOV DL, 176
+    call DRAW_ONE_GHOST 
+    
+    MOV CH, MAGENTA
+    MOV DL, 214
     call DRAW_ONE_GHOST
     
     POP DX
