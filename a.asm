@@ -19,26 +19,40 @@
            db '        /_/ /_/\__,_/_/ /_/\__/   ',10,13           
     title1_len EQU $-title1
                                                                  
-    GHOST_MASK db '   xxxxxx   ',
-               db '  xxxxxxxx  ',
-               db ' xxxxxxxxxx ',
-               db 'xxx  xx  xxx',
-               db 'xxx  xx  xxx',
-               db 'xxxxxxxxxxxx',
-               db 'xxxxxxxxxxxx',
-               db 'xxxxxxxxxxxx',
-               db 'xxx xxxx xxx',
-               db ' x   xx   x '
+    GHOST_MASK db '   xxxxxx   ',' '
+               db '  xxxxxxxx  ',' '
+               db ' xxxxxxxxxx ',' '
+               db 'xxx  xx  xxx',' '
+               db 'xxx  xx  xxx',' '
+               db 'xxxxxxxxxxxx',' '
+               db 'xxxxxxxxxxxx',' '
+               db 'xxxxxxxxxxxx',' '
+               db 'xxx xxxx xxx',' '
+               db ' x   xx   x  '
     GHOST_MASK_WIDTH_LEN db 13
-    GHOST_MASK_HEIGHT_LEN db 10    
+    GHOST_MASK_HEIGHT_LEN db 10  
+    
+    HUNTER_MASK db '   xxxxxxxx ',' '
+                db '  xxxxxxxxxx',' '
+                db ' xx  xxxxxx ',' '
+                db 'xxxxxxxxx   ',' '
+                db 'xxxxxx      ',' '
+                db 'xxxxxx      ',' '
+                db 'xxxxxxxx    ',' '
+                db ' xxxxxxxxx  ',' '
+                db '  xxxxxxxxxx',' '
+                db '   xxxxxxxx  '
+    HUNTER_MASK_WIDTH_LEN db 13
+    HUNTER_MASK_HEIGHT_LEN db 10            
                                    
     ; Gerais
     VIDEO_BUFFER_SEGMENT dw 40960 ; A000H
     PRETO    db 0
     VERDE    db 0AH ;2
-    CIANO    db 0EH ;3
+    CIANO    db 0BH ;3
     VERMELHO db 0CH ;4
     MAGENTA  db 0DH ;5
+    AMARELO  db 0EH ;6 (MARROM)
     
                                                                  
     ; Tela inicial
@@ -258,6 +272,7 @@ DRAW_MASK proc
     PUSH CX   
     PUSH DX
     PUSH AX
+    PUSH DI
              
     call SET_DS_VIDEO_BUFFER
                                         
@@ -291,6 +306,7 @@ DRAW_MASK proc
          CMP AH, 0
          JNE MASK_LINE_RENDER_LOOP
  
+    POP DI
     POP AX
     POP DX
     POP CX
@@ -298,14 +314,18 @@ DRAW_MASK proc
     RET
 endp
              
-; DH = Y (linha). DL = X (coluna). CH = Cor
+; DH = Y (linha). 
+; DL = X (coluna). 
+; CH = Cor
+; DI = 1 = fantasma | 2 = hunter
 DRAW_ONE_GHOST proc
     PUSH AX
-    PUSH DS
-    PUSH BX     
+    PUSH DS     
     PUSH CX 
     PUSH DX
-            
+    PUSH BX
+    PUSH DI
+           
     MOV CL, DL  ; Salva o conteudo de DL em CL como um auxiliar pois a multiplicacao destroi o conteudo de DX
             
     XOR AX, AX
@@ -319,16 +339,28 @@ DRAW_ONE_GHOST proc
     
     MOV BX, AX  ; Salva a posicao exata do pixel em BX                        
 
+    MOV AL, CH  ; Cor para AL
+    CMP DI, 1
+    JE DRAW_GHOST_OPTIONS
+    
+    MOV DX, offset HUNTER_MASK         
+    MOV CL, HUNTER_MASK_WIDTH_LEN               
+    MOV CH, HUNTER_MASK_HEIGHT_LEN
+    JMP DRAW_SELECTED
+    
+    DRAW_GHOST_OPTIONS:
     MOV DX, offset GHOST_MASK         
-    MOV AL, CH                    ; Cor para bl
     MOV CL, GHOST_MASK_WIDTH_LEN               
     MOV CH, GHOST_MASK_HEIGHT_LEN
- 
+    JMP DRAW_SELECTED
+    
+    DRAW_SELECTED:
     call DRAW_MASK 
-             
+          
+    POP DI 
+    POP BX 
     POP DX
     POP CX
-    POP BX
     POP DS
     POP AX
     ret
@@ -338,21 +370,28 @@ DRAW_INITIAL_SCREEN_GHOSTS proc
     PUSH DX
                
     MOV DH, 120 ; ALTURA DE TODOS
+    MOV DL, 75
+    
+    MOV DI, 2 ; Desenhar o ca?ador
+    MOV CH, AMARELO
+    call DRAW_ONE_GHOST
+    
+    MOV DI, 1 ; Desenhar apenas fantasmas a partir de agora
     
     MOV CH, VERDE
-    MOV DL, 100
+    ADD DL, 38
     call DRAW_ONE_GHOST
                        
     MOV CH, CIANO
-    MOV DL, 138 ; X + 38
+    ADD DL, 38
     call DRAW_ONE_GHOST
     
     MOV CH, VERMELHO
-    MOV DL, 176
+    ADD DL, 38
     call DRAW_ONE_GHOST 
     
     MOV CH, MAGENTA
-    MOV DL, 214
+    ADD DL, 38
     call DRAW_ONE_GHOST
     
     POP DX
