@@ -18,7 +18,17 @@
            db '         / __  / /_/ / / / / /_   ',10,13
            db '        /_/ /_/\__,_/_/ /_/\__/   ',10,13           
     title1_len EQU $-title1
-                                                                 
+                            
+    END_GAME_TEXT db '          _____            __    ',10,13
+                  db '         / __(_)_ _    ___/ /__  ',10,13
+                  db '        / _// /    \  / _  / -_) ',10,13
+                  db '       /_/ /_/_/_/_/  \_,_/\__/  ',10,13
+                  db '        __ / /__  ___ ____       ',10,13
+                  db '       / // / _ \/ _ `/ _ \      ',10,13
+                  db '       \___/\___/\_, /\___/      ',10,13
+                  db '                /___/            ',10,13
+    END_GAME_TEXT_LEN EQU $-END_GAME_TEXT
+                  
     GHOST_MASK db '   xxxxxx   ',' '
                db '  xxxxxxxx  ',' '
                db ' xxxxxxxxxx ',' '
@@ -44,8 +54,10 @@
                 db '   xxxxxxxx  '
     HUNTER_MASK_WIDTH_LEN db 13
     HUNTER_MASK_HEIGHT_LEN db 10            
-                                   
-    ; Gerais
+                               
+    SCORE_TEXT db 'Score: $'
+    
+    ; Constantes Gerais
     VIDEO_BUFFER_SEGMENT dw 40960 ; A000H
     PRETO    db 0
     VERDE    db 0AH ;2
@@ -54,13 +66,18 @@
     MAGENTA  db 0DH ;5
     AMARELO  db 0EH ;6 (MARROM)
     
-                                                                 
+    ; Game flags
+    CURRENT_SCREEN db 3 ; 1 | 2 | 3 = Start | Game | End
+    
     ; Tela inicial
+    START_IS_GAME_TITLE_RENDERED db 0 ; 0 ou 1
     TITLE_SELECTED_BTN db 1 ; 1 ou 2     
-    IS_GAME_TITLE_RENDERED db 0 ; 0 ou 1
     START_BTN_1 db 'Jogar$'
     START_BTN_2 db 'Sair$'  
     SHOULD_END_GAME db 0 ; 0 | 1
+    
+    ; Tela de fim de jogo
+    END_BTN_1 db 'Voltar$'
 .code  
 
 ;INPUT : DL=X, DH=Y.
@@ -119,7 +136,7 @@ SHOW_TITLE proc
     mov AH, 13H 
     int 10H    
                    
-    MOV IS_GAME_TITLE_RENDERED, 1
+    MOV START_IS_GAME_TITLE_RENDERED, 1
                    
     pop AX
     pop BX
@@ -128,6 +145,32 @@ SHOW_TITLE proc
     ret
 endp 
   
+SHOW_END_GAME_TEXT proc
+    push DX
+    push CX
+    push BX
+    push AX  
+    
+    mov AL, 0 
+    mov BH, 0 
+    mov BL, 02h ; Cor => 02 = Fundo preto e texto verde
+    
+    mov DH, 4              ; Linha
+    mov DL, 0              ; Coluna
+    mov CX, END_GAME_TEXT_LEN      ; Tamanho
+    mov BP, offset END_GAME_TEXT   ; Endere?o
+    
+    ; https://en.wikipedia.org/wiki/INT_10H
+    mov AH, 13H 
+    int 10H            
+  
+    pop AX
+    pop BX
+    pop CX
+    pop DX  
+    ret
+endp
+
 ; Escuta o clique na tela inicial
 CHANGE_OPTION proc
     PUSH AX
@@ -149,8 +192,23 @@ CHANGE_OPTION proc
     JE CHANGE_OPTION_ACTION
     
     CMP AX, 5000H ; Baixo
-    JE CHANGE_OPTION_ACTION
+    JE CHANGE_OPTION_ACTION  
+    
+    CMP AX, 1C0DH ; Enter
+    JNE END_CHANGE_OPTION      ; Se n?o for o Enter, n?o importa, termine a proc
+    
+    MOV BL, TITLE_SELECTED_BTN ; Caso for o Enter que foi clicado, olhe o bot?o selecionado para determinar a a??o
+    CMP BL, 1                  ; Checa se "Jogar" esta selecionado
+    JNE CLOSE_GAME_OPTION      ; Se n?o for esse o bot?o selecionado, ? o "Sair"
+    
+    MOV CURRENT_SCREEN, 2      ; Muda para o jogo (A??o do bot?o "Jogar") 
+    CALL RESET_GAME_SCREEN
     JMP END_CHANGE_OPTION
+ 
+    CLOSE_GAME_OPTION:
+    MOV SHOULD_END_GAME, 1
+    JMP END_CHANGE_OPTION
+    
                    
     ; Se qualquer tecla (pra cima ou pra baixo) foi clicada, apenas inverta o bot?o selecionado
     CHANGE_OPTION_ACTION:
@@ -173,6 +231,33 @@ CHANGE_OPTION proc
     END_CHANGE_OPTION:   
     POP AX
     RET               
+endp
+
+CHECK_END_GAME_ACTIONS proc
+    PUSH AX
+    XOR AX, AX
+                            
+    ; https://www.stanislavs.org/helppc/int_16.html 
+    ; https://www.youtube.com/watch?v=8dYRlRjgqDY&ab_channel=ProgrammingDimension       
+    
+    ; Checar se alguma tecla foi clicada
+    MOV AH, 01H
+    INT 16H
+    JZ NO_END_SCREEN_OPERATION ; ZF = 0 => nao clicado | ZF = 1 => clicado
+    
+    ; Checar qual botao foi clicado (AL = ASCII Char)
+    MOV AH, 00H                                      
+    INT 16H
+    
+    CMP AX, 1C0DH                    ; Enter
+    JNE NO_END_SCREEN_OPERATION      ; Se n?o for o Enter, n?o importa, termine a proc
+    
+    MOV CURRENT_SCREEN, 1           ; Muda para a tela de inicio 
+    CALL RESET_GAME_SCREEN
+    
+    NO_END_SCREEN_OPERATION:   
+    POP AX
+    ret
 endp         
              
 SET_CARACTERE_A_SER_MOSTRADO proc
@@ -244,7 +329,48 @@ TITLE_BTNS proc
                    
     ret
 endp      
+
+END_GAME_BUTTONS proc
+    PUSH DX
+    PUSH AX
+    
+    mov TITLE_SELECTED_BTN, 1 ; Finge que o bot?o selecionado na end screen ? o mesmo do menu (s? para poder reutilizar o SHOW_TITLE_PARENTHESIS)
+
+    ; Posiciona o cursor na posi??o para escrever o primeiro bot?o             
+    mov DL, 16
+    mov DH, 19
+                                
+    MOV BL, 1
+    CALL SHOW_TITLE_PARENTHESIS
+                        
+    call SET_CURSOR
+    mov DX, offset END_BTN_1
+    mov AH, 09H
+    int 21H   
+    
+    POP AX
+    POP DX    
+    ret
+endp
  
+SHOW_END_SCREEN_SCORE proc
+    PUSH AX
+    PUSH DX    
+
+    MOV DH, 15
+    MOV DL, 11
+    CALL SET_CURSOR
+    
+    XOR AX, AX
+    MOV DX, offset SCORE_TEXT
+    MOV AH, 09H
+    INT 21H    
+    
+    POP DX
+    POP AX
+    ret
+endp
+
 ; Seta o DS para o buffer de v?deo        
 SET_DS_VIDEO_BUFFER proc 
     PUSH AX         
@@ -318,7 +444,7 @@ endp
 ; DL = X (coluna). 
 ; CH = Cor
 ; DI = 1 = fantasma | 2 = hunter
-DRAW_ONE_GHOST proc
+DRAW proc
     PUSH AX
     PUSH DS     
     PUSH CX 
@@ -365,6 +491,17 @@ DRAW_ONE_GHOST proc
     POP AX
     ret
 endp
+
+RESET_GAME_SCREEN proc
+    push AX
+    mov START_IS_GAME_TITLE_RENDERED, 0 
+    
+    mov AX, 13h  ; Seta o modo para v?deo de novo para limpar a tela automaticamente 
+    int 10h            
+            
+    pop AX
+    ret
+endp
         
 DRAW_INITIAL_SCREEN_GHOSTS proc   
     PUSH DX
@@ -374,32 +511,32 @@ DRAW_INITIAL_SCREEN_GHOSTS proc
     
     MOV DI, 2 ; Desenhar o ca?ador
     MOV CH, AMARELO
-    call DRAW_ONE_GHOST
+    call DRAW
     
     MOV DI, 1 ; Desenhar apenas fantasmas a partir de agora
     
     MOV CH, VERDE
     ADD DL, 38
-    call DRAW_ONE_GHOST
+    call DRAW
                        
     MOV CH, CIANO
     ADD DL, 38
-    call DRAW_ONE_GHOST
+    call DRAW
     
     MOV CH, VERMELHO
     ADD DL, 38
-    call DRAW_ONE_GHOST 
+    call DRAW 
     
     MOV CH, MAGENTA
     ADD DL, 38
-    call DRAW_ONE_GHOST
+    call DRAW
     
     POP DX
     ret
 endp
          
 INITIAL_SCREEN proc
-    MOV AL, IS_GAME_TITLE_RENDERED
+    MOV AL, START_IS_GAME_TITLE_RENDERED
     CMP AL, 0            
     JNE START_NEXT_OPERATION ; Se j? renderizou o titulo, n?o renderize novamente
     
@@ -414,21 +551,52 @@ INITIAL_SCREEN proc
     ret
 endp
            
+GAME_SCREEN proc
+    mov CURRENT_SCREEN, 3
+
+    ret
+endp
+           
+END_SCREEN proc
+    call SHOW_END_GAME_TEXT
+    call END_GAME_BUTTONS
+    call SHOW_END_SCREEN_SCORE
+    call CHECK_END_GAME_ACTIONS
+    
+    ret
+endp
+
 inicio: 
     mov AX, @DATA
     mov DS, AX  
-    mov ES, AX 
-    
-    ;call TEXT_MODE   
+    mov ES, AX   
 
-    mov AX, 13h  
+    mov AX, 13h  ; Video mode
     int 10h            
         
     LOOP_GAME:             
-    CALL INITIAL_SCREEN    
-    MOV AL, SHOULD_END_GAME
-    CMP AL, 1 
-    JNE LOOP_GAME
+        MOV AL, CURRENT_SCREEN
+        CMP AL, 1    
+        JNE TEST_TELA_2
+        CALL INITIAL_SCREEN    
+        JMP END_LOOP_GAME
+        
+        TEST_TELA_2:       
+        CMP AL, 2  
+        JNE TEST_TELA_3
+        CALL GAME_SCREEN
+        JMP END_LOOP_GAME
+        
+        TEST_TELA_3:   
+        CMP AL, 3  
+        JNE END_LOOP_GAME
+        CALL END_SCREEN
+        
+        END_LOOP_GAME:
+        MOV AL, SHOULD_END_GAME
+        CMP AL, 1 
+        
+        JNE LOOP_GAME
                 
     mov AH, 4CH
     int 21H
