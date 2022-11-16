@@ -67,7 +67,7 @@
     AMARELO  db 0EH ;6 (MARROM)
     
     ; Game flags
-    CURRENT_SCREEN db 3 ; 1 | 2 | 3 = Start | Game | End
+    CURRENT_SCREEN db 1 ; 1 | 2 | 3 = Start | Game | End
     
     ; Tela inicial
     START_IS_GAME_TITLE_RENDERED db 0 ; 0 ou 1
