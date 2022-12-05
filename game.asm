@@ -2,13 +2,11 @@
 
 .stack 100H
 
-.data 
-    title_line_size db 29  
-                     
+.data     
     CR db 10
-    LF db 13
+    LF db 13        
              
-    title1 db '        ________               __ ',10,13
+    GAME_TITLE db '        ________               __ ',10,13
            db '       / ____/ /_  ____  _____/ /_',10,13
            db '      / / __/ __ \/ __ \/ ___/ __/',10,13
            db '     / /_/ / / / / /_/ (__  ) /_  ',10,13
@@ -17,7 +15,7 @@
            db '          / /_/ / / / / __ \/ __/ ',10,13
            db '         / __  / /_/ / / / / /_   ',10,13
            db '        /_/ /_/\__,_/_/ /_/\__/   ',10,13           
-    title1_len EQU $-title1
+    GAME_TITLE_LEN EQU $-GAME_TITLE
                             
     END_GAME_TEXT db '          _____            __    ',10,13
                   db '         / __(_)_ _    ___/ /__  ',10,13
@@ -66,9 +64,15 @@
     VERMELHO db 0CH ;4
     MAGENTA  db 0DH ;5
     AMARELO  db 0EH ;6 (MARROM)
+    DELAY_LEAST_SIGNIFICANT_PART DW 41248 ;A120H
     
     ; Game flags
-    CURRENT_SCREEN db 2 ; 1 | 2 | 3 = Start | Game | End
+    CURRENT_SCREEN db 1 ; 1 | 2 | 3 = Start | Game | End
+    
+    ; Debug
+    DEBUG_MODE DB 0
+    DEACTIVATE_GAME_TIMER db 0
+    GAME_END_TIME DB 0
     
     ; Tela inicial
     START_IS_GAME_TITLE_RENDERED db 0 ; 0 ou 1
@@ -76,6 +80,8 @@
     START_BTN_1 db 'Jogar$'
     START_BTN_2 db 'Sair$'  
     SHOULD_END_GAME db 0 ; 0 | 1
+    START_MOTION_OFFSET DW 282
+    START_GOING_RIGHT DB 1
     
     ; Tela de fim de jogo
     END_BTN_1 db 'Voltar$'
@@ -85,9 +91,23 @@
     IS_GAME_FIRST_RENDER DB 1
     IS_LINE_GOING_TO_THE_RIGHT DB 0, 0, 0, 0
     LINE_OFFSET DW 0, 0, 0, 0
-    INITIAL_POSITION_GAME_LINES DB 0, 25, 35, 50 ; A primeira que ? igual ao offset 0 n serve pra nada
+    INITIAL_POSITION_GAME_LINES DB 0, 20, 35, 50 ; A primeira que ? igual ao offset 0 n serve pra nada
     NUMBER_OF_GHOSTS_IN_LINE DB 0, 0, 0, 0
     MAX_OF_NUMBER_OF_GHOSTS_IN_LINE DB 0, 2, 3, 4
+    GAME_SCORE_TEXT DB 'SCORE: '         
+    GAME_SCORE_TEXT_LEN EQU $-GAME_SCORE_TEXT
+    GAME_SCORE_QUANTITY_TEXT DB '0000' 
+    GAME_SCORE_QUANTITY_TEXT_LEN EQU $-GAME_SCORE_QUANTITY_TEXT   
+    GAME_SCORE_QUANTITY_TEXT_BKP DB '0000$' ; Para restaurar quando o jogo ? recome?ado
+    GAME_SCORE dw 0  
+    GAME_SECOND_QUANTITY_ELAPSED db 0
+    GAME_SECOND_QUANTITY_ELAPSED_OBJ db 17
+    GAME_TIMER db 60
+    GAME_TIMER_TEXT db '60'
+    GAME_TIMER_TEXT_LEN EQU $-GAME_TIMER_TEXT  
+    GAME_TIMER_TEXT_BKP db '60$' ; Para restaurar quando o jogo ? recome?ado  
+    GAME_TIMER_DESC db 'Tempo: '
+    GAME_TIMER_DESC_LEN EQU $-GAME_TIMER_DESC
 .code  
 
 ;INPUT : DL=X, DH=Y.
@@ -125,6 +145,40 @@ TEXT_MODE proc
     ret
 endp 
         
+
+; Escreve na tela um inteiro sem sinal    
+; de 16 bits armazenado no registrador AX
+ESC_UINT16 proc 
+    push AX      ; Salvar registradores utilizados na proc
+    push BX
+    push CX
+    push DX 
+       
+    mov BX, 10   ; divis?es sucessivas por 10
+    mov cx, 4
+      
+LACO_DIV:
+    xor DX, DX   ; zerar DX pois o dividendo ? DXAX
+    div BX       ; divis?o para separar o d?gito em DX
+    
+    push DX      ; empilhar o d?gito
+     
+    loop LACO_DIV ; enquanto AX diferente de 0 salte para LACO_DIV
+       
+    mov cx, 4    
+ LACO_ESCDIG:   
+    pop DX       ; desempilha o d?gito    
+    add DL, '0'  ; converter o d?gito para ASCII
+    call ESC_CHAR               
+    loop LACO_ESCDIG ; decrementa o contador de d?gitos
+    
+    pop DX       ; Restaurar registradores utilizados na proc
+    pop CX
+    pop BX
+    pop AX
+    ret     
+endp   
+    
 ; --------------------------------------------------------------  
 ; Mostra o t?tulo na tela inicial         
 SHOW_TITLE proc
@@ -139,8 +193,8 @@ SHOW_TITLE proc
     
     mov DH, 4              ; Linha
     mov DL, 0              ; Coluna
-    mov CX, title1_len     ; Tamanho
-    mov BP, offset title1  ; Endere?o
+    mov CX, GAME_TITLE_LEN     ; Tamanho
+    mov BP, offset GAME_TITLE  ; Endere?o
     
     ; https://en.wikipedia.org/wiki/INT_10H
     mov AH, 13H 
@@ -172,25 +226,40 @@ RAND_NUM_0_9 proc
     pop ax
     ret
 endp
-
-;Fazer proc que valida se ? par 
-
-GAME_DELAY proc  
-    push cx
-    push dx
-    push ax
-    
-    xor cx, cx
-    mov dx, 0C350h ; parte alta dos  50000 microsegundos 
-    mov ah, 86h
-    int 15h
-    
-    pop ax
-    pop dx
-    pop cx
-    ret
-GAME_DELAY endp 
   
+SET_GLOBAL_VARIABLES_OF_MAIN_GAME PROC    
+    push dx
+    PUSH CX
+    push ax
+    push bx
+    PUSH DI
+    PUSH SI
+    push es
+    
+    MOV CX, 4
+    MOV SI, OFFSET GAME_SCORE_QUANTITY_TEXT_BKP
+    MOV DI, OFFSET GAME_SCORE_QUANTITY_TEXT
+    REP MOVSB
+    
+    MOV CX, 2
+    MOV SI, OFFSET GAME_TIMER_TEXT_BKP
+    MOV DI, OFFSET GAME_TIMER_TEXT
+    REP MOVSB
+    
+    MOV GAME_SCORE, 0  
+    MOV GAME_TIMER, 60
+    MOV IS_GAME_FIRST_RENDER, 1
+    
+    pop es
+    POP SI
+    POP DI
+    pop bx
+    pop ax
+    POP CX
+    pop dx
+    RET
+ENDP
+
 SHOW_END_GAME_TEXT proc
     push DX
     push CX
@@ -220,6 +289,7 @@ endp
 ; Escuta o clique na tela inicial
 CHANGE_OPTION proc
     PUSH AX
+    PUSH BX
     XOR AX, AX
                             
     ; https://www.stanislavs.org/helppc/int_16.html 
@@ -249,6 +319,7 @@ CHANGE_OPTION proc
     
     MOV CURRENT_SCREEN, 2      ; Muda para o jogo (A??o do bot?o "Jogar") 
     CALL RESET_GAME_SCREEN
+    CALL SET_GLOBAL_VARIABLES_OF_MAIN_GAME
     JMP END_CHANGE_OPTION
  
     CLOSE_GAME_OPTION:
@@ -274,7 +345,8 @@ CHANGE_OPTION proc
     REFRESH_OPTION_BTN:    
     call TITLE_BTNS             ; Renderiza novamente os bot?es em tela
  
-    END_CHANGE_OPTION:   
+    END_CHANGE_OPTION:  
+    POP BX 
     POP AX
     RET               
 endp
@@ -401,6 +473,8 @@ endp
  
 SHOW_END_SCREEN_SCORE proc
     PUSH AX
+    PUSH BX
+    PUSH CX
     PUSH DX    
 
     MOV DH, 15
@@ -412,7 +486,22 @@ SHOW_END_SCREEN_SCORE proc
     MOV AH, 09H
     INT 21H    
     
+    mov AL, 0 
+    mov BH, 0 
+    mov BL, 2 ; Cor => 2 = Verde
+    
+    MOV DH, 15
+    MOV DL, 20
+    CALL SET_CURSOR
+    mov CX, GAME_SCORE_QUANTITY_TEXT_LEN  ; Tamanho
+    mov BP, OFFSET GAME_SCORE_QUANTITY_TEXT  ; Endere?o
+            
+    mov AH, 13H 
+    int 10H    
+    
     POP DX
+    POP CX
+    POP BX
     POP AX
     ret
 endp
@@ -445,7 +534,7 @@ DRAW_MASK proc
     PUSH DX
     PUSH AX
     PUSH DI
-             
+                
     call SET_DS_VIDEO_BUFFER
                                         
     MOV AH, CH ; Altura da mascara eh controlado abaixo por AH 
@@ -474,7 +563,8 @@ DRAW_MASK proc
          SUB BX, CX
          CMP AH, 0
          JNE MASK_LINE_RENDER_LOOP
- 
+
+    SKIP_MASK_RENDER:
     POP DI
     POP AX
     POP DX
@@ -482,7 +572,7 @@ DRAW_MASK proc
     POP DS
     RET
 endp
-             
+ 
 ; DX = X (coluna). 
 ; CH = Cor
 ; DI = 1 = fantasma | 2 = hunter
@@ -577,7 +667,128 @@ DRAW_INITIAL_SCREEN_GHOSTS proc
     POP DX
     ret
 endp
-         
+       
+INVERT_BL_1_0 PROC
+
+    CMP BL, 1
+    JE INVERT_BL_TO_0
+    JNE INVERT_BL_TO_1
+    
+    INVERT_BL_TO_0: 
+    MOV BL, 0
+    JMP END_INVERT_BL
+    
+    INVERT_BL_TO_1:
+    MOV BL, 1
+
+    END_INVERT_BL:
+    RET
+ENDP
+  
+MOVE_START_LINE PROC
+    PUSH AX
+    PUSH BX
+    PUSH CX
+    PUSH DX
+    
+    MOV DX, 120
+    MOV BL, START_GOING_RIGHT
+    XOR BH, BH
+    MOV DI, BX
+    CALL MOVE_LINE
+    
+    CMP BL, 1
+    JE MOVE_START_LINE_RIGHT
+    JNE MOVE_START_LINE_LEFT
+    ;---------
+    
+    MOVE_START_LINE_RIGHT:
+    MOV AX, START_MOTION_OFFSET
+    INC AX
+    MOV START_MOTION_OFFSET, AX
+    JMP MOVE_START_LINE_END
+    
+    MOVE_START_LINE_LEFT:
+    MOV AX, START_MOTION_OFFSET
+    DEC AX
+    MOV START_MOTION_OFFSET, AX
+    JMP MOVE_START_LINE_END
+    
+    ;---------
+    MOVE_START_LINE_END:
+    
+    CMP BL, 1
+    JE START_TEST_OFFSET_ENDING_RIGHT
+    JNE START_TEST_OFFSET_ENDING_LEFT
+    ;------------- 
+    
+    START_TEST_OFFSET_ENDING_RIGHT:
+    CMP AX, 320
+    JNE START_TEST_OFFSET_ENDING_END
+    
+    CALL INVERT_BL_1_0
+    MOV AX, 70
+    MOV START_MOTION_OFFSET, AX
+    MOV START_GOING_RIGHT, BL
+    JMP START_TEST_OFFSET_ENDING_END
+    
+    
+    START_TEST_OFFSET_ENDING_LEFT:
+    CMP AX, 0
+    JNE START_TEST_OFFSET_ENDING_END
+    
+    CALL INVERT_BL_1_0
+    MOV AX, 164
+    MOV START_MOTION_OFFSET, AX
+    MOV START_GOING_RIGHT, BL
+    JMP START_TEST_OFFSET_ENDING_END
+    
+    ;------------- 
+    START_TEST_OFFSET_ENDING_END:
+    CALL DEBUG_START_OFFSET
+    POP DX
+    POP CX
+    POP BX
+    POP AX
+    RET
+ENDP
+
+DEBUG_START_OFFSET PROC
+    PUSH AX 
+    PUSH BX
+    PUSH CX
+    PUSH DX
+    PUSH ES        
+    
+    MOV AL, DEBUG_MODE
+    CMP AL, 0
+    JE SKIP_DEBUG_START_OFFSET
+          
+    MOV ES, VIDEO_BUFFER_SEGMENT
+ 
+    MOV AX, 120
+    MOV BX, 320
+    MUL BX
+                                
+    MOV DX, START_MOTION_OFFSET
+    ADD AX, DX
+    MOV AX, BX
+                 
+    MOV DL, VERMELHO
+    MOV ES:[BX], DL
+    DEC BX          
+    MOV DL, PRETO
+    MOV ES:[BX], DL
+            
+    SKIP_DEBUG_START_OFFSET:
+    POP ES 
+    POP DX
+    POP CX
+    POP BX
+    POP AX
+    ENDP
+ENDP
+
 INITIAL_SCREEN proc
     MOV AL, START_IS_GAME_TITLE_RENDERED
     CMP AL, 0            
@@ -587,10 +798,11 @@ INITIAL_SCREEN proc
     call TITLE_BTNS      
                                                                                  
     call DRAW_INITIAL_SCREEN_GHOSTS
-                                                                                 
+    
     START_NEXT_OPERATION:  
     call CHANGE_OPTION  
-    
+    ;CALL MOVE_START_LINE   
+    ;CALL GAME_DELAY    
     ret
 endp
     
@@ -675,27 +887,10 @@ GET_COLOR_OF_GHOSTS_IN_ROW proc
 endp
 
 GET_START_POSITION_OF_LINE PROC
-    cmp DI, 1
-    je SET_START_POS_OF_GHOSTS_IN_ROW_1
-    cmp DI, 2
-    je SET_START_POS_OF_GHOSTS_IN_ROW_2
-    cmp DI, 3
-    je SET_START_POS_OF_GHOSTS_IN_ROW_3
-    jmp END_START_POS_OF_GHOSTS_IN_ROW
+    MOV BX, OFFSET INITIAL_POSITION_GAME_LINES
+    MOV BL, [BX + DI]
+    XOR BH, BH
     
-    SET_START_POS_OF_GHOSTS_IN_ROW_1:
-    mov BX, 20
-    jmp END_START_POS_OF_GHOSTS_IN_ROW
-    
-    SET_START_POS_OF_GHOSTS_IN_ROW_2:
-    mov BX, 35
-    jmp END_START_POS_OF_GHOSTS_IN_ROW
-    
-    SET_START_POS_OF_GHOSTS_IN_ROW_3:
-    mov BX, 50
-    jmp END_START_POS_OF_GHOSTS_IN_ROW
-    
-    END_START_POS_OF_GHOSTS_IN_ROW:
     RET
 ENDP   
 
@@ -722,7 +917,81 @@ GET_GAME_LEFT_RIGHT PROC
     POP BX
     POP AX
     RET    
-ENDP          
+ENDP  
+
+REFRESH_SCORE_STRING proc
+    push AX      
+    push BX
+    push CX
+    push DX 
+    PUSH DI
+       
+    MOV AX, GAME_SCORE
+    mov BX, 10   ; divis?es sucessivas por 10
+    MOV CX, 4
+      
+    LACO_DIV_SCORE:
+        xor DX, DX   ; zerar DX pois o dividendo ? DXAX
+        div BX       ; divis?o para separar o d?gito em DX
+        
+        add DL, '0'  ; converter o d?gito para ASCII
+        PUSH BX
+        MOV BX, OFFSET GAME_SCORE_QUANTITY_TEXT
+        MOV DI, CX
+        DEC DI
+        MOV [BX + DI], DL
+        POP BX
+        
+        LOOP LACO_DIV_SCORE 
+        
+    POP DI
+    pop DX
+    pop CX
+    pop BX
+    pop AX
+    ret
+endp
+
+RENDER_SCORE PROC
+    PUSH AX
+    PUSH BX
+    PUSH CX
+    PUSH DX
+    PUSH BP    
+    
+    mov AL, 0 ; https://i.pinimg.com/736x/9d/4a/3b/9d4a3b8bece01eb5aef7a78eb0d7be93.jpg
+    mov BH, 0 ; N?mero da p?gina
+    mov BL, 15 ; Cor => 15 = Branco
+    
+    mov DH, 0              ; Linha
+    mov DL, 0              ; Coluna
+    mov CX, GAME_SCORE_TEXT_LEN     ; Tamanho
+    mov BP, offset GAME_SCORE_TEXT  ; Endere?o
+                                            
+    mov AH, 13H 
+    int 10H    
+    
+    CALL REFRESH_SCORE_STRING
+    
+    mov AL, 0 
+    mov BH, 0 
+    mov BL, 2 ; Cor => 2 = Verde
+    
+    mov DH, 0              ; Linha
+    mov DL, 7              ; Coluna
+    mov CX, GAME_SCORE_QUANTITY_TEXT_LEN  ; Tamanho
+    mov BP, OFFSET GAME_SCORE_QUANTITY_TEXT  ; Endere?o
+            
+    mov AH, 13H 
+    int 10H    
+            
+    POP BP
+    POP DX
+    POP CX
+    POP BX
+    POP AX
+    RET
+ENDP        
 
 SET_NEXT_GHOST_POSITION PROC
     PUSH AX
@@ -732,10 +1001,10 @@ SET_NEXT_GHOST_POSITION PROC
     JMP DECREMENT_20_TO_POSITION
        
     INCREMENT_20_TO_POSITION: 
-    ADD DX, 20
+    ADD DX, 32
     JMP END_INCREMENT_POSITION  
     DECREMENT_20_TO_POSITION:
-    SUB DX, 20
+    SUB DX, 32
     END_INCREMENT_POSITION:
     POP AX
     RET
@@ -774,7 +1043,7 @@ GAME_SCREEN_RENDER_GHOSTS_ROW proc
         CALL SET_NEXT_GHOST_POSITION
                   
         DEC AX
-        CMP AX, MINUS_ONE
+        CMP AX, 0
         JNE GHOSTS_ROW_LOOP
     POP DI
     ret
@@ -809,7 +1078,7 @@ MOVE_LINE PROC
     PUSH DX
     PUSH DI
     PUSH ES
-
+         
     MOV CX, 320
     MOV AX, DX
     MUL CX
@@ -828,7 +1097,7 @@ MOVE_LINE PROC
         INC BX
         
         PUSH CX
-        MOV CX, 320
+        MOV CX, 319
         LOOP_MOVE_PIXELS_COLUNA_RIGHT:
             MOV DX, ES:[BX] 
             MOV ES:[BX], AX
@@ -847,7 +1116,7 @@ MOVE_LINE PROC
         DEC BX
         
         PUSH CX
-        MOV CX, 320
+        MOV CX, 319
         LOOP_MOVE_PIXELS_COLUNA_LEFT:
             MOV DX, ES:[BX] 
             MOV ES:[BX], AX
@@ -868,21 +1137,32 @@ MOVE_LINE PROC
     RET
 ENDP  
 
-delay proc  
+GAME_DELAY proc  
     push cx
     push dx
     push ax
     
-    xor cx, cx
-    mov dx, 0C350h ; parte alta dos  50000 microsegundos 
-    mov ah, 86h
-    int 15h
+    mov al, DEACTIVATE_GAME_TIMER
+    cmp al, 1
+    je SKIP_GAME_DELAY
     
+    ;xor cx, cx
+    ;mov dx, DELAY_LEAST_SIGNIFICANT_PART ; parte baixa
+    ;mov cx, 0007h ; parte alta
+    ;mov ah, 86h
+    ;int 15h
+    
+    xor cx, cx
+    mov dx, 0C350h ; 50000 microsegundos
+    mov ah, 86h
+    int 15h ; http://vitaly_filatov.tripod.com/ng/asm/asm_026.13.html
+    
+    SKIP_GAME_DELAY:
     pop ax
     pop dx
     pop cx
     ret
-delay endp 
+GAME_DELAY endp 
       
 DOUBLE_DI proc
     push ax
@@ -905,6 +1185,7 @@ endp
 MOVE_GAME_LINE PROC
     PUSH BX
     PUSH AX
+    push cx
     PUSH DI
 
     MOV BX, OFFSET LINE_OFFSET
@@ -931,11 +1212,16 @@ MOVE_GAME_LINE PROC
     
     GOING_TO_THE_RIGHT_TESTS:
     INC AX
-    CMP AX, 141
+    CMP AX, 320
     JNE END_MOVE_GAME_LINE
     
     CALL INVERT_GHOST_LINE_DIRECTION
     CALL RECALCULATE_GAME_LINE_OFFSET
+    MOV BX, OFFSET LINE_OFFSET ; Busca o valor novo
+    push di
+    call DOUBLE_DI
+    MOV AX, [BX+DI]                          
+    pop di
     JMP END_MOVE_GAME_LINE
     
     
@@ -945,7 +1231,13 @@ MOVE_GAME_LINE PROC
     JNE END_MOVE_GAME_LINE
    
     CALL INVERT_GHOST_LINE_DIRECTION
-    CALL RECALCULATE_GAME_LINE_OFFSET
+    CALL RECALCULATE_GAME_LINE_OFFSET    
+    MOV BX, OFFSET LINE_OFFSET ; Busca o valor novo
+    push di
+    call DOUBLE_DI
+    MOV AX, [BX+DI]                          
+    pop di
+    
     JMP END_MOVE_GAME_LINE
     
     END_MOVE_GAME_LINE:       
@@ -957,27 +1249,32 @@ MOVE_GAME_LINE PROC
     
     POP DI
     POP AX
+    pop cx
     POP BX
     RET
 ENDP
 
-; DI = LINHA
+; DI = LINHA  
+; SI => NOVO VALOR
 INVERT_GHOST_LINE_DIRECTION PROC
     PUSH BX
     PUSH AX
 
     MOV BX, OFFSET IS_LINE_GOING_TO_THE_RIGHT
-    MOV AX, [BX+DI]
+    XOR AX, AX
+    MOV AL, [BX+DI]
     CMP AL, 1
     JE INVERT_GHOST_LINE_DIRECTION_TO_0
     JMP INVERT_GHOST_LINE_DIRECTION_TO_1
     
     INVERT_GHOST_LINE_DIRECTION_TO_0:
     MOV [BX+DI], 0
+    MOV SI, 0
     JMP END_INVERT_GHOST_LINE_DIRECTION
     
     INVERT_GHOST_LINE_DIRECTION_TO_1:
-    MOV [BX+DI], 1
+    MOV [BX+DI], 1 
+    MOV SI, 1
     
     END_INVERT_GHOST_LINE_DIRECTION:
     
@@ -994,22 +1291,29 @@ RECALCULATE_GAME_LINE_OFFSET PROC
     PUSH DX
 
     MOV BX, OFFSET NUMBER_OF_GHOSTS_IN_LINE
-    MOV CX, [BX+DI]
+    XOR CX, CX
+    MOV CL, [BX+DI]
     CMP SI, 0
     JE CHANGE_RECALCULATE_GAME_LINE_OFFSET_LEFT
     JMP CHANGE_RECALCULATE_GAME_LINE_OFFSET_RIGHT
     
     CHANGE_RECALCULATE_GAME_LINE_OFFSET_LEFT:
-    MOV DX, 320
+    MOV DX, 307 ; 320 - 13
+    dec cx
+    cmp cx, 0
+    je END_RECALCULATE_GAME_LINE_OFFSET
     CALCULATE_OFFSET_FROM_THE_LEFT:
-        SUB DX, 32
+        SUB DX, 20h ;20?
         LOOP CALCULATE_OFFSET_FROM_THE_LEFT
     JMP END_RECALCULATE_GAME_LINE_OFFSET
     
     CHANGE_RECALCULATE_GAME_LINE_OFFSET_RIGHT:
-    MOV DX, 0
+    MOV DX, 12 ; Sempre vai ter pelo menos um, e esse um n?o adiciona o espa?amento entre fantasmas, por isso s? 12
+    dec cx
+    cmp cx, 0
+    je END_RECALCULATE_GAME_LINE_OFFSET
     CALCULATE_OFFSET_FROM_THE_RIGHT:
-        ADD DX, 32
+        ADD DX, 20h
         LOOP CALCULATE_OFFSET_FROM_THE_RIGHT
     JMP END_RECALCULATE_GAME_LINE_OFFSET
 
@@ -1026,6 +1330,152 @@ RECALCULATE_GAME_LINE_OFFSET PROC
     RET
 ENDP
 
+UPDATE_GAME_TIMER PROC
+    push ax
+    PUSH BX
+    PUSH CX
+    PUSH DX
+    PUSH DI
+    
+    MOV AL, DEACTIVATE_GAME_TIMER
+    CMP AL, 1
+    JE END_CHANGE_GAME_SECOND_QUANTITY_ELAPSED
+    
+    mov al, GAME_SECOND_QUANTITY_ELAPSED
+    mov ah ,GAME_SECOND_QUANTITY_ELAPSED_OBJ
+    cmp al, ah
+    JE A_SECOND_JUST_PASSED
+    JMP INCREMENT_GAME_SECOND_QUANTITY
+    
+    A_SECOND_JUST_PASSED:
+    XOR AH, AH
+    MOV AL, GAME_TIMER
+    DEC AL
+    MOV GAME_TIMER, AL
+    MOV BX, 10
+    
+    XOR DX, DX
+    DIV BX
+    ADD DL, '0' 
+    PUSH DX   
+    
+    XOR DX, DX 
+    XOR AH, AH
+    DIV BX
+    ADD DL, '0' 
+    PUSH DX
+    
+    MOV BX, OFFSET GAME_TIMER_TEXT    
+    POP DX
+    MOV [BX], DL
+    POP DX
+    MOV [BX + 1], DL 
+    
+    MOV GAME_SECOND_QUANTITY_ELAPSED, 0
+    
+    JMP END_CHANGE_GAME_SECOND_QUANTITY_ELAPSED
+    
+    INCREMENT_GAME_SECOND_QUANTITY:
+    inc al
+    mov GAME_SECOND_QUANTITY_ELAPSED, al
+    
+    END_CHANGE_GAME_SECOND_QUANTITY_ELAPSED:
+    POP DI
+    POP DX
+    POP CX
+    POP BX
+    pop ax
+    RET
+ENDP
+
+RENDER_GAME_TIMER PROC
+    push ax
+    push bx
+    push cx
+    push dx
+    
+    mov AL, 0 ; https://i.pinimg.com/736x/9d/4a/3b/9d4a3b8bece01eb5aef7a78eb0d7be93.jpg
+    mov BH, 0 ; N?mero da p?gina
+    mov BL, 15 ; Cor => 15 = Branco
+    
+    mov DH, 0              ; Linha
+    mov DL, 31              ; Coluna
+    mov CX, GAME_TIMER_DESC_LEN     ; Tamanho
+    mov BP, offset GAME_TIMER_DESC  ; Endere?o
+                                            
+    mov AH, 13H 
+    int 10H    
+    
+    mov AL, 0 
+    mov BH, 0 
+    mov BL, 2 ; Cor => 2 = Verde
+    
+    mov DH, 0              ; Linha
+    mov DL, 38              ; Coluna
+    mov CX, GAME_TIMER_TEXT_LEN  ; Tamanho
+    mov BP, OFFSET GAME_TIMER_TEXT  ; Endere?o
+            
+    mov AH, 13H 
+    int 10H       
+    
+    pop dx
+    pop cx
+    pop bx
+    pop ax
+    RET
+ENDP
+
+MANIPULATE_SCORE_WITH_ARROW PROC
+    PUSH AX
+    PUSH BX
+    
+    ; Checar se alguma tecla foi clicada
+    MOV AH, 01H
+    INT 16H
+    JZ END_MANIPULATE_SCORE_WITH_ARROW ; ZF = 0 => nao clicado | ZF = 1 => clicado
+    
+    ; Checar qual botao foi clicado (AL = ASCII Char)
+    MOV AH, 00H                                      
+    INT 16H
+       
+    CMP AX, 4800H ; Cima 
+    JNE END_MANIPULATE_SCORE_WITH_ARROW
+    
+    MOV BX, 100
+    CALL GENERATE_RANDOM_NUMBER
+    MOV BX, AX
+    MOV AX, GAME_SCORE
+    ADD AX, BX
+    MOV GAME_SCORE, AX
+    
+    END_MANIPULATE_SCORE_WITH_ARROW:
+    POP BX
+    POP AX
+    RET
+ENDP
+
+CHECK_IF_TIMER_HAS_ENDED PROC
+    PUSH AX
+    PUSH BX
+    
+    MOV BL, GAME_END_TIME
+    
+    MOV AL, GAME_TIMER
+    CMP AL, BL
+    JE GAME_HAS_ENDED
+    JMP END_CHECK_IF_TIMER_HAS_ENDED
+    
+    GAME_HAS_ENDED:
+    MOV CURRENT_SCREEN, 3
+    CALL RESET_GAME_SCREEN
+    
+    END_CHECK_IF_TIMER_HAS_ENDED:
+    
+    POP BX
+    POP AX
+    RET
+ENDP
+
 GAME_SCREEN proc
     PUSH DI
     
@@ -1036,6 +1486,7 @@ GAME_SCREEN proc
     call GAME_SCREEN_RENDER_HUNTER
     xor DI, DI
     call RENDER_GAME_GHOSTS_LINE
+    CALL GAME_DEBUG_OFFSET
     MOV IS_GAME_FIRST_RENDER, 0
     ; Primeiro render
     
@@ -1058,50 +1509,116 @@ GAME_SCREEN proc
         CMP DI, 4
         JNE MOVE_LINES_LOOP
 
-    ;call delay
-    ;CALL GAME_DEBUG
+    CALL RENDER_SCORE
+    CALL RENDER_GAME_TIMER
+        
+    CALL GAME_DEBUG_OFFSET_TEXT
+    CALL GAME_DELAY
+    CALL UPDATE_GAME_TIMER
+    CALL CHECK_IF_TIMER_HAS_ENDED
+    
+    CALL MANIPULATE_SCORE_WITH_ARROW
     POP DI
     ret
 endp
 
-GAME_DEBUG PROC
+GAME_DEBUG_OFFSET_TEXT PROC
     push ax
     push bx
     PUSH DX
-    push di
     
-    MOV DH, 19
-    MOV DL, 0
+    MOV AL, DEBUG_MODE
+    CMP AL, 0
+    JE SKIP_GAME_DEBUG_OFFSET_TEXT
+    
+    MOV BX, OFFSET LINE_OFFSET
+    MOV DI, 2
+    MOV AX, [BX + DI]
+    MOV DH, 16
+    MOV DL, 16
     CALL SET_CURSOR
-   
+    CALL ESC_UINT16
+        
+    SKIP_GAME_DEBUG_OFFSET_TEXT:
+    pop dx
+    pop bx
+    pop ax
+    RET
+ENDP
+
+GAME_DEBUG_OFFSET PROC
+    push ax
+    push bx
+    push cx
+    PUSH DX
+    push di
+    push es
+    
+    MOV AL, DEBUG_MODE
+    CMP AL, 0
+    JE SKIP_GAME_DEBUG_OFFSET
+    
+    ; draw offsets
     mov di, 1
-    debug_1:
-    mov bX, offset line_offset
-    mov ax, [bx+di]
-    add ax, '0'
-    mov [bx+di], ax
-    inc di
-    cmp di, 4
-    jne debug_1
-    
-    mov DX, offset line_offset
-    mov AH, 09H 
-    int 21H
-    
-    mov di, 1
-    debug_2:
-    mov bX, offset line_offset
-    mov ax, [bx+di]
-    sub ax, '0'
-    mov [bx+di], ax
-    inc di
-    cmp di, 4
-    jne debug_2
-    
+    loop_321:         
+        push di
+        call double_di
+        mov bx, offset LINE_OFFSET
+        mov dx, [bx + di]
+        pop di
+        mov es, VIDEO_BUFFER_SEGMENT
+        mov bx, offset INITIAL_POSITION_GAME_LINES  
+        xor ax, ax
+        mov al, [bx + di]
+        push dx
+        mov cx, 140h
+        mul cx
+        pop dx
+        add ax, dx
+        xor dx, dx
+        dec bx
+        mov dl, preto
+        mov es:[bx], dl
+        inc bx
+        mov dl, vermelho   
+        mov bx, ax
+        mov es:[bx], dl
+        inc bx
+        mov es:[bx], dl
+        inc bx
+        mov es:[bx], dl
+        add bx, 13dh
+        mov dl, preto
+        mov es:[bx], dl
+        inc bx
+        mov dl, vermelho  
+        mov es:[bx], dl
+        inc bx
+        mov es:[bx], dl
+        inc bx
+        mov es:[bx], dl
+        add bx, 13dh
+        mov dl, preto
+        mov es:[bx], dl
+        inc bx
+        mov dl, vermelho  
+        mov es:[bx], dl
+        inc bx
+        mov es:[bx], dl
+        inc bx
+        mov es:[bx], dl
+        
+        inc di
+        cmp di, 4
+        jne loop_321
+        
+    SKIP_GAME_DEBUG_OFFSET:
+    pop es
     pop di
     pop dx
-    pop ax
+    pop cx
     pop bx
+    pop ax
     RET
 ENDP
            
