@@ -4,17 +4,27 @@
 
 .data     
     CR db 10
-    LF db 13        
+    LF db 13    
+    
+    ; Debug
+    DEACTIVATE_INITIAL_SCREEN_MOVMENT DB 0   ; 0 | 1 - As vezes buga os botoes do menu 
+    DEACTIVATE_GAME_TIMER db 1  ; Desativa o delay de milissegundos e o timer do jogo 
+    GAME_END_TIME DB 0          ; 0 - 60 -> Caso for necess?rio diminuir o timer do jogo a fim de testes
+    DEBUG_MOVMENT_OFFSET DB 0   ; 0 | 1 - Mostra as bounderies/offsets dos movimentos que s?o utilizados para detectar colis?o
+                                ; com o final da tela
+    
+    ; Game flags
+    CURRENT_SCREEN db 2 ; 1 | 2 | 3 = Start | Game | End
              
     GAME_TITLE db '        ________               __ ',10,13
-           db '       / ____/ /_  ____  _____/ /_',10,13
-           db '      / / __/ __ \/ __ \/ ___/ __/',10,13
-           db '     / /_/ / / / / /_/ (__  ) /_  ',10,13
-           db '     \____/_/_/_/\____/____/\__/  ',10,13
-           db '           / / / /_  ______  / /_ ',10,13
-           db '          / /_/ / / / / __ \/ __/ ',10,13
-           db '         / __  / /_/ / / / / /_   ',10,13
-           db '        /_/ /_/\__,_/_/ /_/\__/   ',10,13           
+               db '       / ____/ /_  ____  _____/ /_',10,13
+               db '      / / __/ __ \/ __ \/ ___/ __/',10,13
+               db '     / /_/ / / / / /_/ (__  ) /_  ',10,13
+               db '     \____/_/_/_/\____/____/\__/  ',10,13
+               db '           / / / /_  ______  / /_ ',10,13
+               db '          / /_/ / / / / __ \/ __/ ',10,13
+               db '         / __  / /_/ / / / / /_   ',10,13
+               db '        /_/ /_/\__,_/_/ /_/\__/   ',10,13           
     GAME_TITLE_LEN EQU $-GAME_TITLE
                             
     END_GAME_TEXT db '          _____            __    ',10,13
@@ -57,22 +67,14 @@
     
     ; Constantes Gerais
     VIDEO_BUFFER_SEGMENT dw 40960 ; A000H
-    MINUS_ONE DW 65535
+    FFF0_CONST DW 65535 ; FFF0
     PRETO    db 0
     VERDE    db 0AH ;2
     CIANO    db 0BH ;3
     VERMELHO db 0CH ;4
     MAGENTA  db 0DH ;5
     AMARELO  db 0EH ;6 (MARROM)
-    DELAY_LEAST_SIGNIFICANT_PART DW 41248 ;A120H
-    
-    ; Game flags
-    CURRENT_SCREEN db 1 ; 1 | 2 | 3 = Start | Game | End
-    
-    ; Debug
-    DEBUG_MODE DB 0
-    DEACTIVATE_GAME_TIMER db 0
-    GAME_END_TIME DB 0
+    DELAY_LEAST_SIGNIFICANT_PART DW 41248 ;A120H (para o delay de 500ms)
     
     ; Tela inicial
     START_IS_GAME_TITLE_RENDERED db 0 ; 0 ou 1
@@ -134,15 +136,6 @@ ESC_STR proc
     int 21H  
     pop AX
     ret  
-endp 
-       
-TEXT_MODE proc
-    push AX
-    ; Modo texto
-    mov AX, 13h  
-    int 10h
-    pop AX    
-    ret
 endp 
         
 
@@ -628,6 +621,7 @@ RESET_GAME_SCREEN proc
     push AX
     mov START_IS_GAME_TITLE_RENDERED, 0 
     mov IS_GAME_FIRST_RENDER, 1
+    mov START_MOTION_OFFSET, 282
     
     mov AX, 13h  ; Seta o modo para v?deo de novo para limpar a tela automaticamente 
     int 10h            
@@ -738,7 +732,7 @@ MOVE_START_LINE PROC
     JNE START_TEST_OFFSET_ENDING_END
     
     CALL INVERT_BL_1_0
-    MOV AX, 164
+    MOV AX, 250
     MOV START_MOTION_OFFSET, AX
     MOV START_GOING_RIGHT, BL
     JMP START_TEST_OFFSET_ENDING_END
@@ -753,42 +747,6 @@ MOVE_START_LINE PROC
     RET
 ENDP
 
-DEBUG_START_OFFSET PROC
-    PUSH AX 
-    PUSH BX
-    PUSH CX
-    PUSH DX
-    PUSH ES        
-    
-    MOV AL, DEBUG_MODE
-    CMP AL, 0
-    JE SKIP_DEBUG_START_OFFSET
-          
-    MOV ES, VIDEO_BUFFER_SEGMENT
- 
-    MOV AX, 120
-    MOV BX, 320
-    MUL BX
-                                
-    MOV DX, START_MOTION_OFFSET
-    ADD AX, DX
-    MOV AX, BX
-                 
-    MOV DL, VERMELHO
-    MOV ES:[BX], DL
-    DEC BX          
-    MOV DL, PRETO
-    MOV ES:[BX], DL
-            
-    SKIP_DEBUG_START_OFFSET:
-    POP ES 
-    POP DX
-    POP CX
-    POP BX
-    POP AX
-    ENDP
-ENDP
-
 INITIAL_SCREEN proc
     MOV AL, START_IS_GAME_TITLE_RENDERED
     CMP AL, 0            
@@ -800,25 +758,32 @@ INITIAL_SCREEN proc
     call DRAW_INITIAL_SCREEN_GHOSTS
     
     START_NEXT_OPERATION:  
-    call CHANGE_OPTION  
-    ;CALL MOVE_START_LINE   
-    ;CALL GAME_DELAY    
+    call CHANGE_OPTION   
+    
+    MOV AL, DEACTIVATE_INITIAL_SCREEN_MOVMENT
+    CMP AL, 1
+    JE END_INITIAL_SCREEN_RENDER
+    
+    CALL MOVE_START_LINE   
+    CALL GAME_DELAY 
+    
+    END_INITIAL_SCREEN_RENDER:
     ret
 endp
     
-; BX = Gerar de 1 at? BX
+; BX = Gerar de 1 ate? BX
 GENERATE_RANDOM_NUMBER proc
     PUSH BX
     PUSH CX
     PUSH DX
 
-    MOV AH, 00h  ; interrupts to get system time        
-    INT 1AH      ; CX:DX now hold number of clock ticks since midnight      
+    MOV AH, 00h  ; Interrupcao para obter a hora do sistema    
+    INT 1AH      ; CX:DX tem quantos clocks houve desde a meia noite
 
     mov  ax, dx
     xor  dx, dx
     mov  cx, 10    
-    div  cx       ; here dx contains the remainder of the division - from 0 to 9
+    div  cx
     
     MOV AX, DX
     MUL BX
@@ -1071,6 +1036,7 @@ ENDP
 
 ; DX = linha (humanamente falando) a ser movida
 ; DI = 1 = DIREITA, 0 = ESQUERDA
+
 MOVE_LINE PROC
     PUSH AX
     PUSH BX
@@ -1146,6 +1112,7 @@ GAME_DELAY proc
     cmp al, 1
     je SKIP_GAME_DELAY
     
+    ;; delay de 500ms (muito lento)
     ;xor cx, cx
     ;mov dx, DELAY_LEAST_SIGNIFICANT_PART ; parte baixa
     ;mov cx, 0007h ; parte alta
@@ -1211,9 +1178,10 @@ MOVE_GAME_LINE PROC
     JMP GOING_TO_THE_LEFT_TESTS
     
     GOING_TO_THE_RIGHT_TESTS:
-    INC AX
+    ADD AX, 2
     CMP AX, 320
-    JNE END_MOVE_GAME_LINE
+    JC END_MOVE_GAME_LINE
+    sub AX, 2
     
     CALL INVERT_GHOST_LINE_DIRECTION
     CALL RECALCULATE_GAME_LINE_OFFSET
@@ -1226,10 +1194,11 @@ MOVE_GAME_LINE PROC
     
     
     GOING_TO_THE_LEFT_TESTS:
-    DEC AX
-    CMP AX, MINUS_ONE
-    JNE END_MOVE_GAME_LINE
+    sub AX, 2
+    CMP AX, 2
+    JnC END_MOVE_GAME_LINE
    
+    add AX, 2
     CALL INVERT_GHOST_LINE_DIRECTION
     CALL RECALCULATE_GAME_LINE_OFFSET    
     MOV BX, OFFSET LINE_OFFSET ; Busca o valor novo
@@ -1268,12 +1237,14 @@ INVERT_GHOST_LINE_DIRECTION PROC
     JMP INVERT_GHOST_LINE_DIRECTION_TO_1
     
     INVERT_GHOST_LINE_DIRECTION_TO_0:
-    MOV [BX+DI], 0
+    mov al, 0
+    MOV [BX+DI], al
     MOV SI, 0
     JMP END_INVERT_GHOST_LINE_DIRECTION
     
     INVERT_GHOST_LINE_DIRECTION_TO_1:
-    MOV [BX+DI], 1 
+    mov al, 1
+    MOV [BX+DI], al
     MOV SI, 1
     
     END_INVERT_GHOST_LINE_DIRECTION:
@@ -1298,12 +1269,13 @@ RECALCULATE_GAME_LINE_OFFSET PROC
     JMP CHANGE_RECALCULATE_GAME_LINE_OFFSET_RIGHT
     
     CHANGE_RECALCULATE_GAME_LINE_OFFSET_LEFT:
-    MOV DX, 307 ; 320 - 13
+    MOV DX, 308 ; 320 - 12
     dec cx
     cmp cx, 0
     je END_RECALCULATE_GAME_LINE_OFFSET
+    
     CALCULATE_OFFSET_FROM_THE_LEFT:
-        SUB DX, 20h ;20?
+        SUB DX, 32 
         LOOP CALCULATE_OFFSET_FROM_THE_LEFT
     JMP END_RECALCULATE_GAME_LINE_OFFSET
     
@@ -1313,7 +1285,7 @@ RECALCULATE_GAME_LINE_OFFSET PROC
     cmp cx, 0
     je END_RECALCULATE_GAME_LINE_OFFSET
     CALCULATE_OFFSET_FROM_THE_RIGHT:
-        ADD DX, 20h
+    ADD DX, 32
         LOOP CALCULATE_OFFSET_FROM_THE_RIGHT
     JMP END_RECALCULATE_GAME_LINE_OFFSET
 
@@ -1329,6 +1301,131 @@ RECALCULATE_GAME_LINE_OFFSET PROC
     POP BX
     RET
 ENDP
+
+; Debug ----------- \/
+GAME_DEBUG_OFFSET PROC
+    push ax
+    push bx
+    push cx
+    PUSH DX
+    push di
+    push es
+    
+    MOV AL, DEBUG_MOVMENT_OFFSET
+    CMP AL, 0
+    JE SKIP_GAME_DEBUG_OFFSET
+    
+    mov di, 1
+    LOOP_RED_SQUARE_OFFSET:         
+        push di
+        call double_di
+        mov bx, offset LINE_OFFSET
+        mov dx, [bx + di]
+        pop di
+        mov es, VIDEO_BUFFER_SEGMENT
+        mov bx, offset INITIAL_POSITION_GAME_LINES  
+        xor ax, ax
+        mov al, [bx + di]
+        push dx
+        mov cx, 140h
+        mul cx
+        pop dx
+        add ax, dx
+        xor dx, dx
+        dec bx
+        mov dl, preto
+        mov es:[bx], dl
+        inc bx
+        mov dl, vermelho   
+        mov bx, ax
+        mov es:[bx], dl
+        inc bx
+        mov es:[bx], dl
+        inc bx
+        mov es:[bx], dl
+        add bx, 13dh
+        mov dl, preto
+        mov es:[bx], dl
+        inc bx
+        mov dl, vermelho  
+        mov es:[bx], dl
+        inc bx
+        mov es:[bx], dl
+        inc bx
+        mov es:[bx], dl
+        add bx, 13dh
+        mov dl, preto
+        mov es:[bx], dl
+        inc bx
+        mov dl, vermelho  
+        mov es:[bx], dl
+        inc bx
+        mov es:[bx], dl
+        inc bx
+        mov es:[bx], dl
+        
+        inc di
+        cmp di, 4
+        jne LOOP_RED_SQUARE_OFFSET
+        
+    SKIP_GAME_DEBUG_OFFSET:
+    pop es
+    pop di
+    pop dx
+    pop cx
+    pop bx
+    pop ax
+    RET
+ENDP
+
+DEBUG_START_OFFSET PROC
+    PUSH AX 
+    PUSH BX
+    PUSH CX
+    PUSH DX
+    PUSH ES        
+    
+    MOV AL, DEBUG_MOVMENT_OFFSET
+    CMP AL, 0
+    JE SKIP_DEBUG_START_OFFSET
+          
+    MOV ES, VIDEO_BUFFER_SEGMENT
+ 
+    MOV AX, 120
+    MOV BX, 320
+    MUL BX
+                                
+    MOV DX, START_MOTION_OFFSET
+    ADD AX, DX
+    MOV AX, BX
+    
+    MOV CX, 3
+    LOOP_OFFSET_BLOCK_START:   
+        PUSH CX
+        DEC BX
+        MOV CX, 3
+        MOV DL, PRETO
+        MOV ES:[BX], DL
+        INC BX
+        LOOP_OFFSET_START:
+            MOV DL, VERMELHO
+            MOV ES:[BX], DL
+            INC BX
+            LOOP LOOP_OFFSET_START
+        POP CX
+        LOOP LOOP_OFFSET_BLOCK_START
+        
+             
+            
+    SKIP_DEBUG_START_OFFSET:
+    POP ES 
+    POP DX
+    POP CX
+    POP BX
+    POP AX
+    ENDP
+ENDP
+; Debug /\
 
 UPDATE_GAME_TIMER PROC
     push ax
@@ -1486,7 +1583,6 @@ GAME_SCREEN proc
     call GAME_SCREEN_RENDER_HUNTER
     xor DI, DI
     call RENDER_GAME_GHOSTS_LINE
-    CALL GAME_DEBUG_OFFSET
     MOV IS_GAME_FIRST_RENDER, 0
     ; Primeiro render
     
@@ -1512,115 +1608,15 @@ GAME_SCREEN proc
     CALL RENDER_SCORE
     CALL RENDER_GAME_TIMER
         
-    CALL GAME_DEBUG_OFFSET_TEXT
     CALL GAME_DELAY
     CALL UPDATE_GAME_TIMER
     CALL CHECK_IF_TIMER_HAS_ENDED
+    CALL GAME_DEBUG_OFFSET
     
     CALL MANIPULATE_SCORE_WITH_ARROW
     POP DI
     ret
 endp
-
-GAME_DEBUG_OFFSET_TEXT PROC
-    push ax
-    push bx
-    PUSH DX
-    
-    MOV AL, DEBUG_MODE
-    CMP AL, 0
-    JE SKIP_GAME_DEBUG_OFFSET_TEXT
-    
-    MOV BX, OFFSET LINE_OFFSET
-    MOV DI, 2
-    MOV AX, [BX + DI]
-    MOV DH, 16
-    MOV DL, 16
-    CALL SET_CURSOR
-    CALL ESC_UINT16
-        
-    SKIP_GAME_DEBUG_OFFSET_TEXT:
-    pop dx
-    pop bx
-    pop ax
-    RET
-ENDP
-
-GAME_DEBUG_OFFSET PROC
-    push ax
-    push bx
-    push cx
-    PUSH DX
-    push di
-    push es
-    
-    MOV AL, DEBUG_MODE
-    CMP AL, 0
-    JE SKIP_GAME_DEBUG_OFFSET
-    
-    ; draw offsets
-    mov di, 1
-    loop_321:         
-        push di
-        call double_di
-        mov bx, offset LINE_OFFSET
-        mov dx, [bx + di]
-        pop di
-        mov es, VIDEO_BUFFER_SEGMENT
-        mov bx, offset INITIAL_POSITION_GAME_LINES  
-        xor ax, ax
-        mov al, [bx + di]
-        push dx
-        mov cx, 140h
-        mul cx
-        pop dx
-        add ax, dx
-        xor dx, dx
-        dec bx
-        mov dl, preto
-        mov es:[bx], dl
-        inc bx
-        mov dl, vermelho   
-        mov bx, ax
-        mov es:[bx], dl
-        inc bx
-        mov es:[bx], dl
-        inc bx
-        mov es:[bx], dl
-        add bx, 13dh
-        mov dl, preto
-        mov es:[bx], dl
-        inc bx
-        mov dl, vermelho  
-        mov es:[bx], dl
-        inc bx
-        mov es:[bx], dl
-        inc bx
-        mov es:[bx], dl
-        add bx, 13dh
-        mov dl, preto
-        mov es:[bx], dl
-        inc bx
-        mov dl, vermelho  
-        mov es:[bx], dl
-        inc bx
-        mov es:[bx], dl
-        inc bx
-        mov es:[bx], dl
-        
-        inc di
-        cmp di, 4
-        jne loop_321
-        
-    SKIP_GAME_DEBUG_OFFSET:
-    pop es
-    pop di
-    pop dx
-    pop cx
-    pop bx
-    pop ax
-    RET
-ENDP
            
 END_SCREEN proc
     call SHOW_END_GAME_TEXT
